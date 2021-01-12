@@ -20,11 +20,11 @@ namespace kcp2k
         public Action<ArraySegment<byte>> OnData;
         public Action OnDisconnected;
 
-        // Mirror needs a way to stop kcp message processing while loop
+        // Mirror needs a way to stop the kcp message processing while loop
         // immediately after a scene change message. Mirror can't process any
         // other messages during a scene change.
         // (could be useful for others too)
-        public Func<bool> OnCheckEnabled = () => true;
+        bool paused;
 
         // If we don't receive anything these many milliseconds
         // then consider us disconnected
@@ -307,7 +307,7 @@ namespace kcp2k
             //
             // note that we check it BEFORE ever calling ReceiveNext. otherwise
             // we would silently eat the received message and never process it.
-            while (OnCheckEnabled() &&
+            while (!paused &&
                    ReceiveNextReliable(out KcpHeader header, out ArraySegment<byte> message))
             {
                 // message type FSM. no default so we never miss a case.
@@ -428,15 +428,25 @@ namespace kcp2k
                         //    the current state allows it.
                         if (state == KcpState.Authenticated)
                         {
-                            // only process messages while enabled for Mirror
+                            // only process messages while not paused for Mirror
                             // scene switching etc.
-                            // -> if an unreliable message comes in while not
-                            //    enabled, simply drop it. it's unreliable!
-                            if (OnCheckEnabled())
+                            // -> if an unreliable message comes in while
+                            //    paused, simply drop it. it's unreliable!
+                            if (!paused)
                             {
                                 ArraySegment<byte> message = new ArraySegment<byte>(buffer, 1, msgLength - 1);
                                 OnData?.Invoke(message);
                             }
+
+                            // set last receive time to avoid timeout.
+                            // -> we do this in ANY case even if not enabled.
+                            //    a message is a message.
+                            // -> we set last receive time for both reliable and
+                            //    unreliable messages. both count.
+                            //    otherwise a connection might time out even
+                            //    though unreliable were received, but no
+                            //    reliable was received.
+                            lastReceiveTime = (uint)refTime.ElapsedMilliseconds;
                         }
                         else
                         {
@@ -578,5 +588,24 @@ namespace kcp2k
 
         // get remote endpoint
         public EndPoint GetRemoteEndPoint() => remoteEndpoint;
+
+        // pause/unpause to safely support mirror scene handling and to
+        // immediately pause the receive while loop if needed.
+        public void Pause() => paused = true;
+        public void Unpause()
+        {
+            // unpause
+            paused = false;
+
+            // reset the timeout.
+            // we have likely been paused for > timeout seconds, but that
+            // doesn't mean we should disconnect. for example, Mirror pauses
+            // kcp during scene changes which could easily take > 10s timeout:
+            //   see also: https://github.com/vis2k/kcp2k/issues/8
+            // => Unpause completely resets the timeout instead of restoring the
+            //    time difference when we started pausing. it's more simple and
+            //    it's a good idea to start counting from 0 after we unpaused!
+            lastReceiveTime = (uint)refTime.ElapsedMilliseconds;
+        }
     }
 }

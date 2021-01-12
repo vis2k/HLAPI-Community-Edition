@@ -71,12 +71,6 @@ namespace kcp2k
                 ReceiveWindowSize
             );
 
-            // scene change message will disable transports.
-            // kcp processes messages in an internal loop which should be
-            // stopped immediately after scene change (= after disabled)
-            client.OnCheckEnabled = () => enabled;
-            server.OnCheckEnabled = () => enabled;
-
             Debug.Log("KcpTransport initialized!");
         }
 
@@ -124,6 +118,25 @@ namespace kcp2k
 
             server.Tick();
             client.Tick();
+        }
+
+        // scene change message will disable transports.
+        // kcp processes messages in an internal loop which should be
+        // stopped immediately after scene change (= after disabled)
+        // => kcp has tests to guaranteed that calling .Pause() during the
+        //    receive loop stops the receive loop immediately, not after.
+        void OnEnable()
+        {
+            // unpause when enabled again
+            client?.Unpause();
+            server?.Unpause();
+        }
+
+        void OnDisable()
+        {
+            // pause immediately when not enabled anymore
+            client?.Pause();
+            server?.Pause();
         }
 
         // server
